@@ -1,4 +1,3 @@
--- ChronalDashHandler (LocalScript inside AbilityBars)
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -15,14 +14,14 @@ local mask = player:WaitForChild("PlayerGui"):WaitForChild("AbilityBars"):WaitFo
 local dashEvent = mask:WaitForChild("ChronalDashEvent")
 
 -- Configs
-local HoldTime = 2.5 -- seconds for full charge teleport
+local HoldTime = 2.5
 local TapDuration = 0.3
 local TeleportDistance = 30
 local WarpColor = Color3.fromRGB(50, 50, 80)
 local WarpSaturation = -1
 local WarpContrast = 1.5
 local WarpTint = Color3.fromRGB(0, 0, 255)
-local WarpSoundId = "rbxassetid://912345678" -- Replace with your Chronal Warp sound
+local WarpSoundId = "rbxassetid://"
 local MaxBlur = 20
 
 -- States
