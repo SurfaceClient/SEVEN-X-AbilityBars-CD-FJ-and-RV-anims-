@@ -1,0 +1,503 @@
+-- LocalScript inside AbilityBars
+-- Children: Background, TheLeap, TheGlow, TheScreenGlow
+-- TheGlow must have a uistroke
+-- Script children: LeapAnim, LandAnim
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hum = char:WaitForChild("Humanoid")
+
+-- UI
+local gui = script.Parent
+local Background = gui:WaitForChild("Background")
+local TheLeap = gui:WaitForChild("TheLeap")
+local TheGlow = gui:WaitForChild("TheGlow")
+local TheScreenGlow = gui:WaitForChild("TheScreenGlow")
+local glowStroke = TheGlow:FindFirstChildOfClass("UIStroke")
+
+-- animations
+local leapAnim = script:WaitForChild("LeapAnim")
+local landAnim = script:WaitForChild("LandAnim")
+
+-- Sound IDs (YOU ARE REQUIRED TO HAVE YOUR OWN SOUND ID)
+local LeapSoundId = "rbxassetid://"
+local LandSoundId = "rbxassetid://"
+local ScreenglowSoundId = "rbxassetid://"
+
+-- create sound objects
+local leapSound = Instance.new("Sound")
+leapSound.SoundId = LeapSoundId
+leapSound.Volume = 1
+leapSound.Parent = script
+
+local landSound = Instance.new("Sound")
+landSound.SoundId = LandSoundId
+landSound.Volume = 1
+landSound.Parent = script
+
+local screenGlowSound = Instance.new("Sound")
+screenGlowSound.SoundId = ScreenglowSoundId
+screenGlowSound.Volume = 1
+screenGlowSound.Parent = TheScreenGlow
+
+-- Configs
+local LeapSteps = 7
+local FullColor = Color3.fromRGB(255,167,26)
+local DrainTime = 18
+local FullHoldTime = 3
+local LeapDuration = 0.1 
+local BgCloseDelay = 1.5
+local BgOpenDelay = 2
+
+-- sizes/pos.s (Positions)
+local BackgroundClosedSize = UDim2.new(0,0,0,11)
+local BackgroundClosedPos  = UDim2.new(0.485,0,0.916,0)
+local BackgroundOpenSize   = UDim2.new(0,240,0,11)
+local BackgroundOpenPos    = UDim2.new(0.409,0,0.916,0)
+
+local LeapClosedSize = UDim2.new(0,0,0,6)
+local LeapClosedPos  = UDim2.new(0.485,0,0.919,0)
+local LeapOpenSize   = UDim2.new(0,230,0,6)
+local LeapOpenPos    = UDim2.new(0.412,0,0.919,0)
+
+local GlowClosedSize = UDim2.new(0,226,0,6)
+local GlowClosedPos  = UDim2.new(0.415,0,0.919,0)
+local GlowOpenSize   = UDim2.new(0,253,0,31)
+local GlowOpenPos    = UDim2.new(0.405,0,0.905,0)
+
+-- force closed at start
+Background.Size, Background.Position = BackgroundClosedSize, BackgroundClosedPos
+TheLeap.Size, TheLeap.Position = LeapClosedSize, LeapClosedPos
+TheGlow.Size, TheGlow.Position = GlowClosedSize, GlowClosedPos
+TheGlow.ImageTransparency = 1
+TheScreenGlow.ImageTransparency = 1
+if glowStroke then glowStroke.Transparency = 1 end
+local OriginalColor = TheLeap.ImageColor3
+
+-- State
+local holdingW = false
+local spacePressed = false
+local backgroundOpen = false
+local backgroundTweening = false
+local isFull = false
+local canLeap = false
+local blocking = false
+local closingTask = nil
+
+-- Pixel system
+local leapPixels = LeapOpenSize.X.Offset
+local pixelsPerJump = leapPixels / LeapSteps
+local currentPixels, targetPixels = 0, 0
+
+-- Background functions
+local function openBackground()
+	if backgroundTweening or backgroundOpen then return end
+	backgroundTweening = true
+	local t = TweenService:Create(Background, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+		Size = BackgroundOpenSize, Position = BackgroundOpenPos
+	})
+	t:Play(); t.Completed:Wait()
+	backgroundTweening, backgroundOpen = false, true
+end
+
+local function closeBackground()
+	if backgroundTweening or not backgroundOpen then return end
+	backgroundTweening = true
+	local t = TweenService:Create(Background, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+		Size = BackgroundClosedSize, Position = BackgroundClosedPos
+	})
+	t:Play(); t.Completed:Wait()
+	backgroundTweening, backgroundOpen = false, false
+end
+
+local function scheduleCloseBackground()
+	if closingTask then closingTask:Disconnect() end
+	local conn; conn = RunService.Heartbeat:Connect(function()
+		if holdingW or currentPixels > 0 then
+			conn:Disconnect()
+			closingTask = nil
+			return
+		end
+	end)
+	closingTask = conn
+	task.delay(BgCloseDelay, function()
+		if closingTask == conn then
+			closingTask:Disconnect()
+			closingTask = nil
+			if not holdingW and currentPixels <= 0 then
+				closeBackground()
+			end
+		end
+	end)
+end
+
+-- Leap UI
+local function updateLeapUI()
+	local frac = currentPixels / leapPixels
+	TheLeap.Size = UDim2.new(0, math.floor(currentPixels), 0, LeapClosedSize.Y.Offset)
+	local newX = LeapClosedPos.X.Scale + (LeapOpenPos.X.Scale - LeapClosedPos.X.Scale) * frac
+	TheLeap.Position = UDim2.new(newX,0,LeapClosedPos.Y.Scale,0)
+end
+
+-- Glow pulse
+local pulseActive = false
+local function startPulse()
+	if pulseActive then return end
+	pulseActive = true
+	spawn(function()
+		local elapsed = 0
+		while pulseActive and elapsed < FullHoldTime do
+			if glowStroke then glowStroke.Transparency = 0 end
+			TweenService:Create(TheGlow, TweenInfo.new(0.4), {
+				Size = GlowOpenSize, Position = GlowOpenPos, ImageTransparency = 0.9
+			}):Play()
+			task.wait(0.4)
+			TheGlow.Size, TheGlow.Position = GlowClosedSize, GlowClosedPos
+			TheGlow.ImageTransparency = 1
+			if glowStroke then glowStroke.Transparency = 1 end
+			task.wait(0.4)
+			elapsed += 0.8
+		end
+		TheGlow.Size, TheGlow.Position = GlowClosedSize, GlowClosedPos
+		TheGlow.ImageTransparency = 1
+		if glowStroke then glowStroke.Transparency = 1 end
+		pulseActive = false
+	end)
+end
+
+-- Full reached
+local function onFull()
+	isFull, canLeap = true, true
+	TweenService:Create(TheLeap, TweenInfo.new(0.3), {ImageColor3 = FullColor}):Play()
+	startPulse()
+	task.delay(FullHoldTime, function()
+		if isFull then
+			isFull, canLeap = false, false
+			pulseActive = false
+			TheLeap.ImageColor3 = OriginalColor
+			TheGlow.ImageTransparency = 1
+			if glowStroke then glowStroke.Transparency = 1 end
+		end
+	end)
+end
+
+-- Leap
+local function performLeap()
+	if not canLeap then return end
+	isFull, canLeap, pulseActive = false, false, false
+	currentPixels, targetPixels = 0, 0
+	TheLeap.ImageColor3 = OriginalColor
+	TheGlow.ImageTransparency = 1
+	if glowStroke then glowStroke.Transparency = 1 end
+
+	if screenGlowSound then screenGlowSound:Play() end
+	if leapSound then leapSound:Play() end
+
+	TweenService:Create(TheScreenGlow, TweenInfo.new(0.08), {ImageTransparency = 0}):Play()
+	local track = hum:LoadAnimation(leapAnim)
+	track:Play()
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Velocity = Vector3.new(hrp.Velocity.X, 110, hrp.Velocity.Z)
+	end
+
+	-- AirBorne time 0.5s
+	task.wait(0.5)
+
+	local landedConn
+	landedConn = hum.StateChanged:Connect(function(_, new)
+		if new == Enum.HumanoidStateType.Landed then
+			landedConn:Disconnect()
+			local oldWalk, oldJump = hum.WalkSpeed, hum.JumpPower
+			hum.WalkSpeed, hum.JumpPower = 0, 0
+			blocking = true
+
+			if landSound then landSound:Play() end
+
+			local landTrack = hum:LoadAnimation(landAnim)
+			landTrack:Play()
+			landTrack.Stopped:Wait()
+			hum.WalkSpeed, hum.JumpPower, blocking = oldWalk, oldJump, false
+
+			-- screenGlow fades out over 1.5 seconds
+			TweenService:Create(TheScreenGlow, TweenInfo.new(1.5), {ImageTransparency = 1}):Play()
+		end
+	end)
+end
+
+-- Input
+UIS.InputBegan:Connect(function(input,gpe)
+	if gpe or blocking then return end
+	if input.KeyCode == Enum.KeyCode.W then
+		holdingW = true
+		task.delay(BgOpenDelay, function()
+			if holdingW then openBackground() end
+		end)
+	end
+	if input.KeyCode == Enum.KeyCode.Space then
+		spacePressed = true
+		if holdingW and backgroundOpen then
+			if targetPixels < leapPixels then
+				targetPixels += pixelsPerJump
+				if targetPixels >= leapPixels and not isFull then
+					targetPixels = leapPixels
+					onFull()
+				end
+			end
+		end
+	end
+	if input.KeyCode == Enum.KeyCode.Q and UIS:IsKeyDown(Enum.KeyCode.Space) then
+		performLeap()
+	end
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.W then
+		holdingW = false
+		if currentPixels <= 0 then
+			scheduleCloseBackground()
+		end
+	end
+	if input.KeyCode == Enum.KeyCode.Space then
+		spacePressed = false
+	end
+end)
+
+-- Drain
+RunService.RenderStepped:Connect(function(dt)
+	if not spacePressed and not isFull and currentPixels > 0 then
+		local drainRate = leapPixels / DrainTime
+		currentPixels = math.max(0, currentPixels - drainRate*dt)
+		targetPixels = currentPixels
+		if currentPixels <= 0 and not holdingW then
+			scheduleCloseBackground()
+		end
+	end
+	if currentPixels < targetPixels then
+		currentPixels = math.min(targetPixels, currentPixels + 4)
+	end
+	updateLeapUI()
+end)
+
+
+
+
+
+-- The Flail Jump Section
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hum = char:WaitForChild("Humanoid")
+local hrp = char:WaitForChild("HumanoidRootPart")
+
+local mask = player:WaitForChild("PlayerGui"):WaitForChild("AbilityBars"):WaitForChild("Mask")
+local flailEvent = mask:WaitForChild("FlailJumpEvent")
+
+-- Configs
+local FullHoldTime = 2
+local ShellCloseDelay = 3
+local JumpBoost = 1.4
+local HpCost = 20
+local MaxFov = 70
+local DefaultFov = 70
+local FovInDuration = 0.35
+local FovOutDuration = 1.5
+
+-- == YOU ARE REQUIRED TO HAVE YOUR OWN ANIMATION ID =
+local FlailAnimId = "rbxassetid://"
+local FlailSoundId = "rbxassetid://"
+
+-- States
+local holding = false
+local filled = false
+local shellOpen = false
+local shellCloseTask
+local landedConnection
+
+-- Helpers
+local function send(action)
+	flailEvent:Fire(action)
+end
+
+local function scheduleCloseShell()
+	if shellCloseTask then
+		task.cancel(shellCloseTask)
+	end
+	shellCloseTask = task.delay(ShellCloseDelay, function()
+		if not holding and not filled then
+			send("CloseShell")
+			shellOpen = false
+		end
+	end)
+end
+
+-- Input Handling
+UIS.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		holding = true
+		if not shellOpen then
+			send("OpenShell")
+			shellOpen = true
+		end
+
+		send("FillInsides")
+		local startTime = tick()
+
+		task.spawn(function()
+			task.wait(FullHoldTime)
+			if holding and tick() - startTime >= FullHoldTime then
+				filled = true
+			end
+		end)
+	end
+end)
+
+UIS.InputEnded:Connect(function(input, gpe)
+	if gpe then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		holding = false
+		if not filled then
+			send("DrainInsides")
+		end
+		scheduleCloseShell()
+	end
+end)
+
+-- Ledge Detection
+local function isNearEdge()
+	if not hrp or not hum or hum.FloorMaterial == Enum.Material.Air then
+		return false
+	end
+
+	local origin = hrp.Position + (hrp.CFrame.LookVector * 2)
+	local direction = Vector3.new(0, -10, 0)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {char}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+
+	local result = Workspace:Raycast(origin, direction, params)
+	if result then
+		local dropDistance = (origin.Y - result.Position.Y)
+		return dropDistance > 4
+	end
+
+	return true
+end
+
+-- FOV effect
+local function fovBurst()
+	local cam = Workspace.CurrentCamera
+	if not cam then return end
+
+	local tweenIn = TweenService:Create(cam, TweenInfo.new(FovInDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = MaxFov})
+	local tweenOut = TweenService:Create(cam, TweenInfo.new(FovOutDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {FieldOfView = DefaultFov})
+
+	tweenIn:Play()
+	tweenIn.Completed:Wait()
+	tweenOut:Play()
+end
+
+-- Concussion effect on landing
+local function concussionFlash()
+	local cc = Lighting:FindFirstChild("FlailJumpConcussion") or Instance.new("ColorCorrectionEffect")
+	cc.Name = "FlailJumpConcussion"
+	cc.Parent = Lighting
+	cc.Saturation = 0
+
+	local saturate = TweenService:Create(cc, TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Saturation = 2})
+	local desaturate = TweenService:Create(cc, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Saturation = 0})
+
+	saturate:Play()
+	saturate.Completed:Wait()
+	desaturate:Play()
+	desaturate.Completed:Wait()
+end
+
+-- FlailJump (FJ)
+UIS.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode ~= Enum.KeyCode.Space then return end
+	if not filled then return end
+
+	print("FJ occuring")
+
+	-- Reset fill 
+	filled = false
+	send("DrainInsides")
+	scheduleCloseShell()
+
+	local nearEdge = isNearEdge()
+	print("Edge detection result (downward):", nearEdge)
+
+	if nearEdge then
+		local originalJumpPower = hum.JumpPower
+		hum.JumpPower = originalJumpPower * JumpBoost
+		hum:ChangeState(Enum.HumanoidStateType.Jumping)
+		print("Applying jump")
+
+		-- Sound
+		local sound = Instance.new("Sound")
+		sound.SoundId = FlailSoundId
+		sound.Volume = 1
+		sound.PlaybackSpeed = 2
+		sound.Parent = hrp
+		sound:Play()
+		game.Debris:AddItem(sound, 3)
+
+		-- Fov burst
+		task.spawn(fovBurst)
+
+		-- animation
+		local anim = Instance.new("Animation")
+		anim.AnimationId = FlailAnimId
+		local track = hum:LoadAnimation(anim)
+		track.Priority = Enum.AnimationPriority.Action
+		track:Play()
+		game.Debris:AddItem(anim, 2)
+
+		-- Blur
+		local blur = Instance.new("BlurEffect")
+		blur.Size = 0
+		blur.Parent = Lighting
+		local blurIn = TweenService:Create(blur, TweenInfo.new(0.15, Enum.EasingStyle.Sine), {Size = 25})
+		local blurOut = TweenService:Create(blur, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Size = 0})
+		blurIn:Play()
+		blurIn.Completed:Wait()
+		blurOut:Play()
+		blurOut.Completed:Wait()
+		blur:Destroy()
+
+		-- apply damage and consussion on landState
+		if landedConnection then landedConnection:Disconnect() end
+		landedConnection = hum.StateChanged:Connect(function(_, newState)
+			if newState == Enum.HumanoidStateType.Landed then
+				hum.Health = math.max(0, hum.Health - HpCost)
+				print("FD worked")
+				hum.JumpPower = originalJumpPower
+				task.spawn(concussionFlash)
+				landedConnection:Disconnect()
+				landedConnection = nil
+			end
+		end)
+	else
+		print("no ledge")
+		filled = false
+		send("DrainInsides")
+		scheduleCloseShell()
+	end
+end)
