@@ -1,3 +1,3 @@
 I'll add on to this once actual files have been added to the repo
 
-! [The-Full-Design.png] (The-Full-Design.png)
+! [GUI design.png] (InterfaceDesign/GUI design.png)
